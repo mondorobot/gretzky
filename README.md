@@ -4,16 +4,45 @@
 
 **The Great One**
 
+A JS widget framework built on top of the [jQuery Widget Factory](http://www.smashingmagazine.com/2011/10/11/essential-jquery-plugin-patterns/) pattern at [Mondo Robot](http://mondorobot.com).
+
 ### Installation
 
-`bower install https://github.com/mondorobot/gretzky.git`
+Install via Bower"
+
+```
+bower install https://github.com/mondorobot/gretzky.git
+```
+
+or add to your project's `bower.json` file:
+
+```
+"dependencies": {
+  "gretzky": "0.0.1"
+  ...
+```
+
+Then include it in your project:
+
+```
+bower install
+```
+
+Then include `base.js` and `factory.js` your HTML template:
+
+```
+<script src="<path/to/base.js>"></script>
+<script src="<path/to/factory.js>"></script>
+```
 
 ### Usage
-1) Bower install
 
-2) Include `base.js` and `factory.js` on the page
+Create widgets that inherit from the base widget class:
 
-3) Extend widgets using `$.widget('mondo.*YourWidgetNameHere*', $.mondo.base, { ...`
+```
+$.widget('mondo.*YourWidgetNameHere*', $.mondo.base, { ...`
+```
+
 
 4) Call `window.WidgetFactory.refresh()` to instantiate/refresh widgets
 
