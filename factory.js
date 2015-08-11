@@ -5,8 +5,45 @@
   // Keys are the data-widget values to search for on the page
   // Values are the corresponding $.widget to apply
   var WIDGET_DEFINITIONS = {
-    // 'switch': 'switchwidget' //  ->  $('[data-widget="switch"]').switchwidget();
-  };
+      // 'switch': 'switchwidget' //  ->  $('[data-widget="switch"]').switchwidget();
+    },
+    onBefore = [],
+    onComplete = [],
+    refreshDebounceThresh = 200,
+    $body = $(document.body);
+
+
+  /**
+   * Debounces the Factory refresh call back to `refreshDebounceThresh`ms
+   *
+   * @param  {jQuery} $container Optional container to target upon refresh
+   * @return {void}
+   */
+  function debounceRefresh($container) {
+    // no container = use body
+    if (!$container) {
+      $container = $body;
+      // no $ wrapper = wrap it
+    } else if (!($container instanceof $)) {
+      $container = $($container);
+    }
+
+    // figure out times etc
+    var self = this,
+      now = (+new Date),
+      last = $container.data('lastRefresh') || -99999,
+      dif = now - last;
+
+    // save this as the last time a refresh was requested
+    $container.data('lastRefresh', now);
+
+    // if we're still under the refresh Debounce
+    if (dif < refreshDebounceThresh) {
+      return;
+    }
+
+    refresh($container);
+  }
 
   /**
    * Main factory function
@@ -17,22 +54,31 @@
   function refresh($container) {
     // no container = use body
     if (!$container) {
-      $container = $(document.body);
+      $container = $body;
       // no $ wrapper = wrap it
     } else if (!($container instanceof $)) {
       $container = $($container);
     }
+
+    // run any `onBefore` functions
+    executeBefores($container);
 
     // temp loop variables
     var $v, j,
       widgetRequest,
       widgetNames,
       widgetDefinition,
+      /**
+       * Function to find widget declarations on an element,
+       * and instantiate those widgets as necessary
+       * (define it here since we use it for both children and the container)
+       */
       initElWidget = function(i, v) {
         $v = $(v);
         // get the desired widget name from the el
-        widgetRequest = $v.attr('data-widget');
+        widgetRequest = $v.attr('data-widget') || '';
 
+        // split by spaces so we can have multiple widgets on one element
         widgetNames = widgetRequest.split(' ');
 
         for (j = 0; j < widgetNames.length; j++) {
@@ -42,7 +88,11 @@
           // (don't have to check for previous instances,
           // as widget.refresh will be called)
           if (widgetDefinition) {
-            $v[widgetDefinition]();
+            try {
+              $v[widgetDefinition]();
+            } catch (e) {
+              console && console.warn && console.warn('Factory : refresh : error instancing ' + widgetNames[j]);
+            }
           }
         }
       };
@@ -56,6 +106,9 @@
       // if so, just fire the same function we used for everything else
       initElWidget(null, $container[0]);
     }
+
+    // run any `onComplete` functions
+    executeCompletes($container);
   }
 
   /**
@@ -78,11 +131,58 @@
   }
 
   /**
+   * Adds a function to fire before the Factory refreshes
+   * @param {Function} fn    The callback function to fire before
+   */
+  function _addBefore(fn) {
+    onBefore.push(fn);
+  }
+
+  /**
+   * Executes the queue of onBefore items
+   * @param  {Element} $target Element to pass as the onBefore argument
+   * @return {void}
+   */
+  function executeBefores($target) {
+    var thisBefore;
+    for (var i = 0; i < onBefore.length; i++) {
+      thisBefore = onBefore[i];
+      thisBefore && thisBefore($target);
+    }
+  }
+
+  /**
+   * Adds a function to fire after the Factory refreshes
+   * @param {Function} fn    The callback function to fire after
+   */
+  function _addComplete(fn) {
+    onComplete.push(fn);
+  }
+
+  /**
+   * Executes the queue of onComplete items
+   * @param  {Element} $target Element to pass as the onComplete argument
+   * @return {void}
+   */
+  function executeCompletes($target) {
+    var thisComplete;
+    for (var i = 0; i < onComplete.length; i++) {
+      thisComplete = onComplete[i];
+      thisComplete && thisComplete($target);
+    }
+  }
+
+  /**
    * Expose the public function(s)
    * @type {Object}
    */
   window.WidgetFactory = {
-    'refresh': refresh
+    'refresh': debounceRefresh,
+    '_refresh': refresh,
+    // we expose our internal 'add' functions as more
+    // conventional 'on' functions
+    'onBefore': _addBefore,
+    'onComplete': _addComplete
   };
 
 })(jQuery, window, document);

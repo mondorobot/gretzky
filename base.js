@@ -6,6 +6,7 @@
     '$window': $(window),
     '$html': $('html'),
     '$body': $(document.body),
+    // used for some things like animating scrollTop in FF
     '$dom': $('html, body'),
     // options function just like normal $ plugin options
     // properties here will be read from the dom later (in getOptionsFromData)
@@ -18,6 +19,13 @@
     // event name : name of handling function
     'events': {},
 
+
+    // since jquery ui is weird and decides to make static members out
+    // of things that look like instance variables, we wrap them in this object
+    'instanceVars': function() {
+      return {};
+    },
+
     // each widget has a unique id, supplied later in generateUniqueID
     'id': '',
 
@@ -28,6 +36,10 @@
     // (this is where the "global event space" is contained)
     '$global': $(document.body),
 
+    // flag for dealing with sessionStorage stuff
+    // (in case cookies are disabled etc)
+    'hasStorage': false,
+
     /**
      * Constructor. Runs on widget instantiation.
      * Options are passed in via widget constructor function, which
@@ -37,17 +49,37 @@
      */
     '_create': function() {
       var widget = this;
-
       // mm chaining
       widget
-      // set the widget's id
+      // set up the private instance vars
+        .createInstanceVariables()
+        // set the widget's id
         .generateUniqueID()
         // read the dom for any overridden options
         .getOptionsFromData()
         // bind the events that others may trigger on this widget
         .bindIncomingEvents()
+        // determine capabilities
+        .determineCapabilities()
         // refresh to basically init stuff
         .refresh();
+
+      return widget;
+    },
+
+    'createInstanceVariables': function() {
+      var widget = this,
+        instanceVars = (typeof widget.instanceVars === 'function' ? widget.instanceVars() : widget.instanceVars),
+        varName, initValue;
+
+      for (varName in instanceVars) {
+        if (instanceVars.hasOwnProperty(varName)) {
+          // if this property is already set, don't set it to the init val
+          if (!widget.hasOwnProperty(varName)) {
+            widget[varName] = instanceVars[varName];
+          }
+        }
+      }
 
       return widget;
     },
@@ -62,8 +94,8 @@
 
       // wish this just returned the string, but instead it sets this element's
       // ID attribute
-      $el.uniqueId();
-      widget.id = $el.attr('id') || '';
+      $el.uniqueId && $el.uniqueId();
+      widget.id = $el.attr('id') || '' + Math.round(Math.random() * 1000) + (+new Date());
 
       return (get ? widget.id : widget);
     },
@@ -128,7 +160,10 @@
         listener;
 
       for (listener in events) {
-        $el.unbind(listener).on(listener, widget[events[listener]].bind(widget));
+        // if the widget has the defined handler..
+        if (!!widget[events[listener]]) {
+          $el.unbind(listener).on(listener, widget[events[listener]].bind(widget));
+        }
       }
 
       return widget;
@@ -205,6 +240,12 @@
       return widget;
     },
 
+
+    /**
+     * Utility function to create an object with relevant emission event data
+     * @param  {string} eventName Event type to generate data for
+     * @return {object}           Compiled information
+     */
     'generateEmitData': function(eventName) {
       var widget = this;
       return {
@@ -215,8 +256,19 @@
       };
     },
 
-    'bindGlobal': function(eventName, eventHandler, allowMultiple) {
-      if (!eventName || eventName === '') {
+    /**
+     * Function to bind an event on the global namespace.
+     * Prepends `global:` to the requested event name, and attaches
+     * handlers (multiple or singular) to that event
+     *
+     * @param  {string}   eventName       Global event to bind
+     * @param  {function} eventHandler    Handling function to fire
+     * @param  {boolean}  preventMultiple Optional, force only this handler to exist for this event?
+     * @return {widget}                   this
+     */
+    'bindGlobal': function(eventName, eventHandler, preventMultiple) {
+      // no event = no sale
+      if (!eventName || eventName === '' || !eventHandler || typeof eventHandler !== 'function') {
         return widget;
       }
 
@@ -228,14 +280,25 @@
       var widget = this,
         eventID = widget.generateUniqueEvent(eventName);
 
-      if (!allowMultiple) {
+      // force only one to fire
+      if (preventMultiple) {
         widget.$global.unbind(eventID);
       }
 
+      // bind the actual global object with the event + handler
       widget.$global.on(eventID, eventHandler);
       return widget;
     },
 
+
+    /**
+     * Alias for `emit(..., ..., true)`
+     * Fires an event on the global namespace
+     *
+     * @param  {string} eventName Global event name to trigger
+     * @param  {object} eventData Relevant event data to emit
+     * @return {widget}           this
+     */
     'emitGlobal': function(eventName, eventData) {
       var widget = this;
       return widget.emit(eventName, eventData, true);
@@ -246,7 +309,7 @@
      * Pre-populates some event data along with any addt'l info passed in
      * @param  {String} eventName Event name to trigger
      * @param  {Object} eventData Event-related info to pass with trigger
-     * @return {void}
+     * @return {widget}           this
      */
     'emit': function(eventName, eventData, emitOnGlobal) {
       var widget = this,
@@ -264,6 +327,7 @@
         }
       }
 
+      // determine if we need to do some global jiggery-pokery
       if (emitOnGlobal) {
         // ensure global things are namespaced accordingly
         if (eventName.indexOf('global:') < 0) {
@@ -271,12 +335,24 @@
         }
         widget.$global.trigger(eventName, emittedData);
       } else {
+        // else we just trigger on this widget
         widget.element.trigger(eventName, emittedData);
       }
 
       return widget;
     },
 
+
+    /**
+     * Uniquely binds an event to provided element.
+     * Used primarily for functions that live in the `refresh` function,
+     * usually to find new elements and bind them as they enter the page.
+     *
+     * @param  {jQuery}   $el     Element to bind
+     * @param  {string}   event   Event to bind
+     * @param  {function} handler Handling function
+     * @return {widget}           this
+     */
     'safeBind': function($el, event, handler) {
       var widget = this,
         eventName = widget.generateUniqueEvent(event);
@@ -287,6 +363,64 @@
 
       $el.unbind(eventName).on(eventName, handler);
       return widget;
+    },
+
+
+    /**
+     * Unbinds an event from provided element,
+     * using `generateUniqueEvent` to provide the correct namespace.
+     *
+     * @param  {jQuery} $el   Element to unbind
+     * @param  {string} event Event name to unbind
+     * @return {widget}       This
+     */
+    'unbind': function($el, event) {
+      var widget = this,
+        eventName = widget.generateUniqueEvent(event);
+
+      if (!($el instanceof $)) {
+        $el = $($el);
+      }
+
+      $el.unbind(eventName);
+      return widget;
+    },
+
+    /**
+     * Capability check to determine various function availability
+     * Currently checks for `sessionStorage` support
+     *
+     * @return {widget} this
+     */
+    'determineCapabilities': function() {
+      var widget = this;
+
+      widget.hasStorage = widget._sessionStorageCheck();
+
+      return widget;
+    },
+
+
+    /**
+     * Test to determine if sessionStorage is available,
+     * without breaking permissions etc
+     * @return {boolean} Is sessionStorage available and usable?
+     */
+    '_sessionStorageCheck': function() {
+      var widget = this;
+
+      try {
+        var tst = 'test-ignore';
+        if (window.sessionStorage) {
+          window.sessionStorage.setItem(tst, tst);
+          window.sessionStorage.getItem(tst);
+          return true;
+        } else {
+          return false;
+        }
+      } catch (err) {
+        return false;
+      }
     }
   });
 
